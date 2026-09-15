@@ -73,3 +73,34 @@ class VoiceSessionManager:
             response_format="mp3"
         )
         return response.content
+
+    def get_full_transcript(self) -> str:
+        """Retorna a transcrição completa da conversa formatada."""
+        lines = []
+        for msg in self.history:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "user":
+                lines.append(f"User: {content}")
+            elif role == "assistant":
+                lines.append(f"Agent: {content}")
+        return "\n".join(lines)
+
+    async def generate_call_summary(self) -> str:
+        """Gera um resumo da ligação com base no histórico da conversa."""
+        transcript = self.get_full_transcript()
+        if not transcript.strip():
+            return "Ligação encerrada sem interação de voz."
+            
+        summary_prompt = [
+            {"role": "system", "content": "Você é um analisador de chamadas telefônicas. Escreva um resumo conciso (2 a 3 frases) em português dos pontos principais discutidos nesta conversa."},
+            {"role": "user", "content": f"Transcrição da chamada:\n{transcript}"}
+        ]
+        
+        res = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=summary_prompt,
+            temperature=0.3
+        )
+        return res.choices[0].message.content or ""
+

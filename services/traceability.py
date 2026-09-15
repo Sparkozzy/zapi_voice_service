@@ -100,3 +100,54 @@ async def record_step_execution(execution_id: str, step_name: str, status: str, 
         payload["error_details"] = error_details
 
     master.table("workflow_step_executions").insert(payload).execute()
+
+
+async def save_call_history_record(
+    client_cfg: Dict[str, Any],
+    to_number: str,
+    zaap_id: str,
+    transcript: str,
+    duration_seconds: int,
+    disconnection_reason: str = "user_hangup",
+    call_summary: str = "",
+    lead_name: str = "",
+    lead_email: str = ""
+):
+    """
+    Grava o registro detalhado de histórico da chamada na tabela Retell_calls_Mindflow do Supabase do Cliente.
+    """
+    supabase_url = client_cfg.get("supabase_url")
+    supabase_key = client_cfg.get("supabase_service_key") or client_cfg.get("supabase_anon_key")
+    
+    if not supabase_url or not supabase_key:
+        logger.warning("Supabase do cliente não configurado para gravação em Retell_calls_Mindflow.")
+        return
+
+    tenant_client = create_client(supabase_url, supabase_key)
+    now_utc = datetime.now(timezone.utc).isoformat()
+    agent_id = client_cfg.get("agent_id_ligacao_whatsapp") or client_cfg.get("retell_agent_id_ligacao_whatsapp") or "agent_zapi_voice"
+
+    payload = {
+        "created_at": now_utc,
+        "Nome": lead_name or "Lead WhatsApp",
+        "Email": lead_email or "",
+        "Numero": to_number,
+        "to_number": to_number,
+        "from_number": client_cfg.get("whatsapp_phone_number", ""),
+        "status": "connected" if duration_seconds > 0 else "not_connected",
+        "call_id": zaap_id,
+        "agent_id": agent_id,
+        "agent_name": f"Agente WhatsApp Z-API ({client_cfg.get('client_name', 'Mindflow')})",
+        "transcript": transcript,
+        "disconnection_reason": disconnection_reason,
+        "Duracao": str(duration_seconds),
+        "call_summary": call_summary,
+        "combined_cost": "0.01"  # Custo aproximado estimado por minuto
+    }
+
+    try:
+        tenant_client.table("Retell_calls_Mindflow").insert(payload).execute()
+        logger.info(f"Registro de chamada {zaap_id} salvo com sucesso em Retell_calls_Mindflow do cliente {client_cfg.get('client_id')}.")
+    except Exception as e:
+        logger.error(f"Erro ao salvar em Retell_calls_Mindflow: {str(e)}", exc_info=True)
+
