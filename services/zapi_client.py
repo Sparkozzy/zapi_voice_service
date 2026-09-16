@@ -27,12 +27,29 @@ class ZapiClient:
         cleaned = "".join(filter(str.isdigit, phone))
         return cleaned
 
+    async def get_whatsapp_phone_jid(self, phone: str) -> str:
+        """Consulta o servidor do WhatsApp via Z-API para obter o número exato cadastrado (JID)."""
+        clean_number = self._clean_phone(phone)
+        url = f"{self.BASE_URL}/{self.instance_id}/token/{self.instance_token}/phone-exists/{clean_number}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers=self._get_headers())
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("exists") and data.get("phone"):
+                        exact_phone = data.get("phone")
+                        logger.info(f"JID WhatsApp resolvido com sucesso: de '{clean_number}' para '{exact_phone}'")
+                        return exact_phone
+        except Exception as e:
+            logger.warning(f"Não foi possível consultar phone-exists para {clean_number}: {e}")
+        return clean_number
+
     async def send_call(self, phone: str, call_audio_url: Optional[str] = None) -> Dict[str, Any]:
         """
         Dispara um sinal de ligação via Z-API POST /send-call.
-        Requer callAudioUrl para evitar cancelamento automático da chamada.
+        Resolve automaticamente o JID do WhatsApp e requer callAudioUrl.
         """
-        clean_number = self._clean_phone(phone)
+        clean_number = await self.get_whatsapp_phone_jid(phone)
         url = f"{self.BASE_URL}/{self.instance_id}/token/{self.instance_token}/send-call"
         payload = {"phone": clean_number}
         if call_audio_url:
