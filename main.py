@@ -75,6 +75,24 @@ async def get_sip_credentials(client_id: str):
     return {"status": "success", "sip_credentials": creds}
 
 
+# Registro global para rastreamento do ciclo de vida das chamadas (Auditoria de Testes)
+call_tracker: Dict[str, Dict[str, Any]] = {}
+
+
+@app.get("/call/status/{call_id}")
+async def get_call_tracker_status(call_id: str):
+    """Retorna o rastreamento em tempo real dos eventos e status da chamada."""
+    if call_id in call_tracker:
+        return call_tracker[call_id]
+    raise HTTPException(status_code=404, detail="Chamada não encontrada no rastreador.")
+
+
+@app.get("/call/tracker")
+async def list_recent_tracked_calls():
+    """Retorna as ultimas chamadas rastreadas no sistema."""
+    return {"total": len(call_tracker), "calls": list(call_tracker.values())[-20:]}
+
+
 @app.post("/webhook/call", response_model=CallTriggerResponse, status_code=202)
 async def trigger_whatsapp_call(request: CallTriggerRequest):
     """
@@ -160,7 +178,19 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
         zaap_id = zapi_resp.get("zaapId")
         message_id = zapi_resp.get("messageId")
 
-        # Registrar sessão conversacional ativa para escutar retornos do webhook
+        # Registrar no rastreador de auditoria e sessões ativas
+        call_tracker[exec_id] = {
+            "execution_id": exec_id,
+            "phone": request.numero,
+            "client_id": request.client_id,
+            "zaap_id": zaap_id,
+            "message_id": message_id,
+            "status": "INITIATED",
+            "created_at": datetime.utcnow().isoformat(),
+            "zapi_response": zapi_resp,
+            "events": []
+        }
+        
         active_sessions[exec_id] = {
             "session": session,
             "client_id": request.client_id,
@@ -228,6 +258,17 @@ async def handle_zapi_event(payload: Dict[str, Any]):
         if sess_data.get("phone") == phone or sess_data.get("zaap_id") == zaap_id:
             session_key = key
             break
+
+    # Registrar evento no call_tracker de auditoria
+    if session_key and session_key in call_tracker:
+        call_tracker[session_key]["events"].append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "event": event_type,
+            "status": status,
+            "payload": payload
+        })
+        if status:
+            call_tracker[session_key]["status"] = status
 
     # Se recebeu áudio do usuário na ligação
     if audio_url and session_key and session_key in active_sessions:
