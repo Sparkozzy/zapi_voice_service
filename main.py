@@ -13,6 +13,7 @@ from services.traceability import (
     update_workflow_status,
     record_step_execution
 )
+from services.database import init_db, save_voice_call_record
 from services.audio_engine import VoiceSessionManager
 
 load_dotenv()
@@ -34,6 +35,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def on_startup():
+    """Inicializa as tabelas no PostgreSQL exclusivo da aplicação se a DATABASE_URL estiver presente."""
+    await init_db()
 
 
 @app.get("/health")
