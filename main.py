@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Depends, Header, WebSocket, WebSocketDisconnect
@@ -167,28 +168,41 @@ async def handle_zapi_event(payload: Dict[str, Any]):
 async def websocket_audio_endpoint(websocket: WebSocket, client_id: str):
     """
     WebSocket endpoint para streaming de áudio bidirecional em tempo real.
+    - Aguarda até 20 segundos por uma fala do usuário ('Alô?', etc.).
+    - Se o usuário não falar em 20 segundos, a IA toma a iniciativa e faz a saudação inicial.
     """
     await websocket.accept()
     logger.info(f"Conexão WebSocket de áudio estabelecida para client_id {client_id}")
     try:
-        # Carregar prompt e configurações do cliente
         client_cfg = await get_client_config(client_id)
         voice_id = client_cfg.get("voice_id", "nova")
         prompt = "Você é o assistente virtual da MindFlow. Responda com naturalidade e concisão."
         
         session = VoiceSessionManager(system_prompt=prompt, voice_id=voice_id)
+        user_spoken = False
 
+        # Primeira rodada: aguardar fala do usuário por até 20 segundos
+        try:
+            data = await asyncio.wait_for(websocket.receive_bytes(), timeout=20.0)
+            if data:
+                user_spoken = True
+                user_text = await session.transcribe_audio_bytes(data)
+                assistant_text = await session.process_user_text_message(user_text)
+                speech_bytes = await session.generate_speech_bytes(assistant_text)
+                await websocket.send_bytes(speech_bytes)
+        except asyncio.TimeoutError:
+            logger.info(f"Usuário não falou 'Alô' nos primeiros 20 segundos. IA iniciando a conversa para client_id {client_id}...")
+            assistant_text = await session.generate_initial_greeting_if_silent()
+            speech_bytes = await session.generate_speech_bytes(assistant_text)
+            await websocket.send_bytes(speech_bytes)
+
+        # Continuação da chamada
         while True:
-            # Receber mensagem/áudio do cliente
             data = await websocket.receive_bytes()
             if data:
-                # Transcrever entrada do usuário
                 user_text = await session.transcribe_audio_bytes(data)
-                # Gerar resposta de IA
                 assistant_text = await session.process_user_text_message(user_text)
-                # Sintetizar áudio de resposta
                 speech_bytes = await session.generate_speech_bytes(assistant_text)
-                # Enviar de volta pelo WebSocket
                 await websocket.send_bytes(speech_bytes)
 
     except WebSocketDisconnect:

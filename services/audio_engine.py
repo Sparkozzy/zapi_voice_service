@@ -52,6 +52,20 @@ class VoiceSessionManager:
         self.history.append({"role": "assistant", "content": assistant_text})
         return assistant_text
 
+    async def generate_initial_greeting_if_silent(self, prompt_override: Optional[str] = None) -> str:
+        """Gera uma saudação iniciada pela IA caso o usuário não fale 'Alô' nos primeiros 20 segundos."""
+        greeting_prompt = prompt_override or "O usuário atendeu a ligação mas não falou 'Alô' nos primeiros 20 segundos. Diga 'Olá! Tudo bem? Falo com o responsável?' de forma natural e amigável."
+        self.history.append({"role": "system", "content": greeting_prompt})
+        
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=self.history,
+            temperature=0.7
+        )
+        assistant_text = response.choices[0].message.content or "Olá! Tudo bem? Falo com o responsável?"
+        self.history.append({"role": "assistant", "content": assistant_text})
+        return assistant_text
+
     async def transcribe_audio_bytes(self, audio_bytes: bytes, filename: str = "user_audio.wav") -> str:
         """Transcreve áudio binário do usuário via OpenAI Whisper."""
         buffer = io.BytesIO(audio_bytes)
