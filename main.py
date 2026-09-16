@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Depends, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Header, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -22,6 +22,9 @@ load_dotenv()
 # Logging Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("zapi_voice_service")
+
+# Cache em memória para arquivos de áudio estáticos de cada chamada
+audio_cache: Dict[str, bytes] = {}
 
 app = FastAPI(
     title="Z-API Voice Service (MindFlow EDW)",
@@ -48,6 +51,14 @@ async def on_startup():
 async def health_check():
     """Endpoint de verificação de saúde do serviço."""
     return {"status": "healthy", "service": "zapi_voice_service"}
+
+
+@app.get("/audio/{call_id}.mp3")
+async def get_call_audio(call_id: str):
+    """Retorna o áudio MP3 de voz gerado pela OpenAI TTS para a chamada."""
+    if call_id in audio_cache:
+        return Response(content=audio_cache[call_id], media_type="audio/mpeg")
+    raise HTTPException(status_code=404, detail="Áudio da chamada não encontrado.")
 
 
 @app.post("/webhook/call", response_model=CallTriggerResponse, status_code=202)
@@ -118,7 +129,16 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
             security_token=zapi_security_token
         )
         
-        default_audio_url = "https://raw.githubusercontent.com/Sparkozzy/zapi_voice_service/main/assets/silence.mp3"
+        voice_id = client_cfg.get("voice_id", "nova")
+        prompt = request.contexto or "Você é o assistente virtual da MindFlow. Responda de forma natural, profissional e acolhedora."
+        session = VoiceSessionManager(system_prompt=prompt, voice_id=voice_id)
+        
+        # Sintetizar a voz inicial do Agente de IA via OpenAI TTS
+        greeting_text = "Olá! Tudo bem? Aqui é a assistente virtual da MindFlow. Como posso te ajudar hoje?"
+        greeting_mp3 = await session.generate_speech_bytes(greeting_text)
+        audio_cache[exec_id] = greeting_mp3
+
+        default_audio_url = f"http://72.60.255.170:8000/audio/{exec_id}.mp3"
         audio_url_to_use = request.call_audio_url or default_audio_url
         
         zapi_resp = await zapi_client.send_call(request.numero, call_audio_url=audio_url_to_use)
