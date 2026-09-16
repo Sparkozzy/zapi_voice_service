@@ -56,12 +56,23 @@ async def health_check():
     return {"status": "healthy", "service": "zapi_voice_service"}
 
 
-@app.get("/audio/{call_id}.mp3")
-async def get_call_audio(call_id: str):
-    """Retorna o áudio MP3 de voz gerado pela OpenAI TTS para a chamada."""
-    if call_id in audio_cache:
-        return Response(content=audio_cache[call_id], media_type="audio/mpeg")
-    raise HTTPException(status_code=404, detail="Áudio da chamada não encontrado.")
+from services.sip_engine import ZapiSipEngine
+
+
+@app.get("/sip/info/{client_id}")
+async def get_sip_credentials(client_id: str):
+    """Consulta as credenciais SIP e status da conta Z-API para chamadas conversacionais."""
+    client_cfg = await get_client_config(client_id)
+    zapi_instance_id = client_cfg.get("zapi_instance_id")
+    zapi_client_token = client_cfg.get("zapi_client_token")
+    zapi_security_token = client_cfg.get("zapi_security_token")
+
+    if not zapi_instance_id or not zapi_client_token or not zapi_security_token:
+        raise HTTPException(status_code=400, detail="Credenciais Z-API não encontradas para o cliente.")
+
+    sip_engine = ZapiSipEngine(zapi_instance_id, zapi_client_token, zapi_security_token)
+    creds = await sip_engine.fetch_sip_credentials()
+    return {"status": "success", "sip_credentials": creds}
 
 
 @app.post("/webhook/call", response_model=CallTriggerResponse, status_code=202)
