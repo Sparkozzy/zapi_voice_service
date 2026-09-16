@@ -138,7 +138,8 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
         greeting_mp3 = await session.generate_speech_bytes(greeting_text)
         audio_cache[exec_id] = greeting_mp3
 
-        default_audio_url = f"http://72.60.255.170:8000/audio/{exec_id}.mp3"
+        base_public_url = os.getenv("BASE_PUBLIC_URL", "http://72.60.255.170:8000")
+        default_audio_url = f"{base_public_url}/audio/{exec_id}.mp3"
         audio_url_to_use = request.call_audio_url or default_audio_url
         
         zapi_resp = await zapi_client.send_call(request.numero, call_audio_url=audio_url_to_use)
