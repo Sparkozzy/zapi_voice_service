@@ -9,6 +9,7 @@ class CallTriggerRequest(BaseModel):
     numero: str = Field(..., description="Telefone do destinatário (ex: '+5548996027108')")
     contexto: Optional[str] = Field(default=None, description="Contexto dinâmico para o prompt da IA")
     quando_ligar: Optional[str] = Field(default=None, description="Timestamp ISO 8601 com fuso horário")
+    call_audio_url: Optional[str] = Field(default=None, description="URL do arquivo de áudio para a Z-API tocar na chamada")
 
 
 class CallTriggerResponse(BaseModel):

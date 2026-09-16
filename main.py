@@ -118,7 +118,10 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
             security_token=zapi_security_token
         )
         
-        zapi_resp = await zapi_client.send_call(request.numero)
+        default_audio_url = "https://raw.githubusercontent.com/Sparkozzy/zapi_voice_service/main/assets/silence.mp3"
+        audio_url_to_use = request.call_audio_url or default_audio_url
+        
+        zapi_resp = await zapi_client.send_call(request.numero, call_audio_url=audio_url_to_use)
         zaap_id = zapi_resp.get("zaapId")
         message_id = zapi_resp.get("messageId")
 

@@ -27,16 +27,19 @@ class ZapiClient:
         cleaned = "".join(filter(str.isdigit, phone))
         return cleaned
 
-    async def send_call(self, phone: str) -> Dict[str, Any]:
+    async def send_call(self, phone: str, call_audio_url: Optional[str] = None) -> Dict[str, Any]:
         """
         Dispara um sinal de ligação via Z-API POST /send-call.
+        Requer callAudioUrl para evitar cancelamento automático da chamada.
         """
         clean_number = self._clean_phone(phone)
         url = f"{self.BASE_URL}/{self.instance_id}/token/{self.instance_token}/send-call"
         payload = {"phone": clean_number}
+        if call_audio_url:
+            payload["callAudioUrl"] = call_audio_url
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            logger.info(f"Enviando send-call Z-API para {clean_number} (instância: {self.instance_id})")
+            logger.info(f"Enviando send-call Z-API para {clean_number} (instância: {self.instance_id}, callAudioUrl: {call_audio_url})")
             response = await client.post(url, json=payload, headers=self._get_headers())
             
             if response.status_code != 200:
