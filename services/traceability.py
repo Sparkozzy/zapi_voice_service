@@ -21,6 +21,12 @@ def get_master_supabase() -> Client:
         key = os.getenv("MASTER_SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
         if not url or not key:
             raise ValueError("Credenciais do Supabase Master não configuradas no arquivo .env")
+        
+        # Sanitizar chave caso haja aspas ou duplicidade de caracteres do Easypanel
+        key = key.strip('"\' \t\r\n')
+        if "20622887713" in key:
+            key = key.replace("20622887713", "2062288713")
+            
         _master_client = create_client(url, key)
     return _master_client
 
