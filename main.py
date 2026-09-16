@@ -1,6 +1,9 @@
 import os
+import uuid
+import httpx
 import asyncio
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Depends, Header, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -146,6 +149,15 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
         zaap_id = zapi_resp.get("zaapId")
         message_id = zapi_resp.get("messageId")
 
+        # Registrar sessão conversacional ativa para escutar retornos do webhook
+        active_sessions[exec_id] = {
+            "session": session,
+            "client_id": request.client_id,
+            "phone": request.numero,
+            "zaap_id": zaap_id,
+            "start_time": datetime.utcnow()
+        }
+
         await record_step_execution(
             execution_id=exec_id,
             step_name=f"{workflow_name}_send_call",
@@ -179,13 +191,96 @@ async def trigger_whatsapp_call(request: CallTriggerRequest):
         raise HTTPException(status_code=500, detail=f"Erro interno no serviço de voz: {str(e)}")
 
 
+# Gerenciador de sessões ativas por ID de execução/chamada
+active_sessions: Dict[str, Dict[str, Any]] = {}
+
+
 @app.post("/webhook/zapi/event")
 async def handle_zapi_event(payload: Dict[str, Any]):
     """
-    Webhook para tratamento de eventos de estado de chamada recebidos da Z-API.
+    Webhook conversacional para tratamento de eventos de estado de chamada e áudio Z-API.
+    - Recebe áudio do usuário, transcreve, gera resposta via LLM + OpenAI TTS.
+    - Retorna a nova URL de áudio para continuar a conversa na chamada.
+    - Grava o histórico final na tabela voice_calls do Postgres ao desligar.
     """
     logger.info(f"Evento Z-API recebido: {payload}")
-    return {"status": "received", "event": payload.get("event")}
+    
+    event_type = payload.get("event") or payload.get("type")
+    phone = payload.get("phone") or payload.get("from")
+    zaap_id = payload.get("zaapId") or payload.get("callId")
+    status = payload.get("status")
+    audio_url = payload.get("audioUrl") or payload.get("audio") or (payload.get("audio", {}) if isinstance(payload.get("audio"), dict) else {}).get("audioUrl")
+
+    # Localizar sessão ativa por telefone ou zaap_id
+    session_key = None
+    for key, sess_data in list(active_sessions.items()):
+        if sess_data.get("phone") == phone or sess_data.get("zaap_id") == zaap_id:
+            session_key = key
+            break
+
+    # Se recebeu áudio do usuário na ligação
+    if audio_url and session_key and session_key in active_sessions:
+        sess_info = active_sessions[session_key]
+        session: VoiceSessionManager = sess_info["session"]
+        
+        try:
+            logger.info(f"Baixando áudio do usuário da URL: {audio_url}")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(audio_url)
+                if resp.status_code == 200:
+                    user_audio_bytes = resp.content
+                    
+                    # 1. Transcrever com Whisper
+                    user_text = await session.transcribe_audio_bytes(user_audio_bytes)
+                    logger.info(f"Transcrição do usuário ({phone}): '{user_text}'")
+                    
+                    # 2. Processar resposta com LLM
+                    assistant_text = await session.process_user_text_message(user_text)
+                    logger.info(f"Resposta do Agente IA: '{assistant_text}'")
+                    
+                    # 3. Sintetizar áudio de resposta via OpenAI TTS
+                    speech_bytes = await session.generate_speech_bytes(assistant_text)
+                    
+                    # 4. Salvar áudio em cache para a Z-API tocar
+                    reply_audio_id = f"reply_{uuid.uuid4().hex}"
+                    audio_cache[reply_audio_id] = speech_bytes
+                    
+                    base_public_url = os.getenv("BASE_PUBLIC_URL", "https://zapi-voice-service-api.bkpxmb.easypanel.host")
+                    next_audio_url = f"{base_public_url}/audio/{reply_audio_id}.mp3"
+                    
+                    return {
+                        "status": "success",
+                        "callAudioUrl": next_audio_url,
+                        "assistant_text": assistant_text
+                    }
+        except Exception as e:
+            logger.error(f"Erro ao processar fala do usuário no webhook Z-API: {e}", exc_info=True)
+
+    # Se a chamada foi encerrada/desconectada
+    if status in ["DISCONNECTED", "ENDED", "CANCELLED", "COMPLETED"] and session_key in active_sessions:
+        sess_info = active_sessions.pop(session_key, {})
+        session: VoiceSessionManager = sess_info.get("session")
+        start_time = sess_info.get("start_time", datetime.utcnow())
+        end_time = datetime.utcnow()
+        duration_seconds = int((end_time - start_time).total_seconds())
+
+        if session:
+            transcript = session.get_full_transcript()
+            summary = await session.generate_call_summary()
+
+            await save_voice_call_record(
+                call_id=session_key,
+                client_id=sess_info.get("client_id", "2"),
+                phone_number=phone or sess_info.get("phone", ""),
+                duration_seconds=duration_seconds,
+                transcript=transcript,
+                call_summary=summary,
+                disconnection_reason=status or "user_hangup",
+                status="completed"
+            )
+            logger.info(f"Histórico de chamada {session_key} gravado com sucesso no PostgreSQL próprio.")
+
+    return {"status": "received", "event": event_type}
 
 
 @app.websocket("/ws/audio/{client_id}")
